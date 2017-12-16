@@ -1,0 +1,72 @@
+---
+title: "publication_figs"
+author: "Jonathan Tay"
+date: "December 15, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r results='asis'}
+library(tidyverse)
+library(stargazer)
+
+vars <- c("Sex", "Age", "Diabetes", "HF", "MI.Angina", 
+          "BslNIH", "Side", "Occl", "occl4", "corticalscore", "tPAdelay", 
+          "mRS_3m", "CoreCBF30", "MismCBF30", "CoreCBV60",
+          "MismCBV60")
+
+read.csv('../data/data_final.csv', na.strings = "?") %>%
+  select(vars) %>%
+  drop_na(., BslNIH) -> df
+
+df %>% 
+  summarise_at(c('Age', 'tPAdelay', 
+                 'CoreCBF30', 'MismCBF30',
+                 'CoreCBV60', 'MismCBV60'), 
+               c('mean', 'sd'), na.rm=T)
+
+df %>%
+  count(mRS_3m) %>%
+  mutate(per=round(n/sum(n), 3)*100) -> clinical
+
+df %>%
+  mutate(poor = mRS_3m >= 5,
+         moderate = mRS_3m <= 3,
+         good = mRS_3m <= 2,
+         excellent = mRS_3m <= 1) -> df
+
+catVars <- c('Sex', 'Side', 'occl4', 'corticalscore')
+contVars <- c('Age', 'BslNIH', 'tPAdelay',
+              'CoreCBF30', 'MismCBF30',
+              'CoreCBV60', 'MismCBV60')
+outVars <- c('poor', 'moderate', 'good', 'excellent')
+
+stargazer(df)
+
+for (outcome in outVars) {
+  map(df[catVars], function(x) table(x, df[[outcome]])) %>%
+  map(., function(x) chisq.test(x)) %>%
+  map_df(., magrittr::extract, c('statistic', 'p.value')) %>%
+  round(., 3) -> x2
+}
+stargazer(x2, type = 'html')
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
