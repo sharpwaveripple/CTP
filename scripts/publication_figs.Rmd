@@ -6,67 +6,138 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = F,
+                      message = F,
+                      warning = F,
+                      results = 'asis')
 ```
 
-## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+```{r}
+# Load packages, define variables
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r results='asis'}
 library(tidyverse)
+library(broom)
+library(rpart)
 library(stargazer)
 
-vars <- c("Sex", "Age", "Diabetes", "HF", "MI.Angina", 
-          "BslNIH", "Side", "Occl", "occl4", "corticalscore", "tPAdelay", 
-          "mRS_3m", "CoreCBF30", "MismCBF30", "CoreCBV60",
+extractP <- function(results) {
+  p <- results[seq(2, length(results), 2)]
+  p <- unlist(p)
+  corr <- p.adjust(p)
+  return(corr)
+}
+
+bin <- c("Sex", "Diabetes", "HF", "MI/Angina", "Side")
+ord <- c("mRS_3m", "occl4", "pig3")
+cont <- c("Age",
+          "BslNIH",
+          "tPAdelay",
+          "CoreCBF30",
+          "MismCBF30",
+          "CoreCBV60",
           "MismCBV60")
+vars <- c(bin, ord, cont)
+sig <- 3
 
-read.csv('../data/data_final.csv', na.strings = "?") %>%
+read_csv('../data/data_final.csv', na = "?") %>%
   select(vars) %>%
-  drop_na(., BslNIH) -> df
+  drop_na(., BslNIH) %>%
+  mutate(
+    dead = mRS_3m == 6,
+    poor = mRS_3m >= 5,
+    moderate = mRS_3m <= 3,
+    good = mRS_3m <= 2,
+    excellent = mRS_3m <= 1
+  ) %>%
+  mutate_at(bin, funs(factor(.))) %>%
+  mutate_at(ord, funs(ordered(.))) ->
+  df
 
-df %>% 
-  summarise_at(c('Age', 'tPAdelay', 
-                 'CoreCBF30', 'MismCBF30',
-                 'CoreCBV60', 'MismCBV60'), 
-               c('mean', 'sd'), na.rm=T)
+#summarise_at(cont, c("median", "IQR"), na.rm = T)
 
 df %>%
   count(mRS_3m) %>%
-  mutate(per=round(n/sum(n), 3)*100) -> clinical
+  mutate(per = round(n / sum(n), sig) * 100) -> clinical
 
-df %>%
-  mutate(poor = mRS_3m >= 5,
-         moderate = mRS_3m <= 3,
-         good = mRS_3m <= 2,
-         excellent = mRS_3m <= 1) -> df
+catVars <- c(bin, ord)
+outVars <- c('dead', 'poor', 'moderate', 'good', 'excellent')
 
-catVars <- c('Sex', 'Side', 'occl4', 'corticalscore')
-contVars <- c('Age', 'BslNIH', 'tPAdelay',
-              'CoreCBF30', 'MismCBF30',
-              'CoreCBV60', 'MismCBV60')
-outVars <- c('poor', 'moderate', 'good', 'excellent')
+```
 
-stargazer(df)
+```{r}
+
+# Univariate
+catResults <- matrix(, nrow = length(catVars), ncol = 0)
+contResults <- matrix(, nrow = length(cont), ncol = 0)
+rownames(catResults) <- catVars
+rownames(contResults) <- cont
 
 for (outcome in outVars) {
-  map(df[catVars], function(x) table(x, df[[outcome]])) %>%
-  map(., function(x) chisq.test(x)) %>%
-  map_df(., magrittr::extract, c('statistic', 'p.value')) %>%
-  round(., 3) -> x2
+  map(df[catVars], function(x)
+    table(x, df[[outcome]])) %>%
+    map(., function(x)
+      chisq.test(x)) %>%
+    map_df(., magrittr::extract, c('statistic', 'p.value')) ->
+    x2
+  catResults <- cbind(catResults, x2)
+  
+  map(df[cont], function(x)
+    t.test(x ~ df[[outcome]])) %>%
+    map_df(., magrittr::extract, c('statistic', 'p.value')) ->
+    f
+  contResults <- cbind(contResults, f)
 }
-stargazer(x2, type = 'html')
+
+map(df[catVars], function(x)
+  table(x, df$mRS_3m)) %>%
+  map(., function(x)
+    chisq.test(x)) %>%
+  map_df(., magrittr::extract, c('statistic', 'p.value')) -> x2
+catResults <- cbind(catResults, x2)
+
+map(df[cont], function(x) aov(x ~ df$mRS_3m)) %>%
+  map(., function(x) tidy(x)) %>%
+  map_df(., magrittr::extract, c('statistic', 'p.value')) %>%
+  drop_na -> f
+contResults <- cbind(contResults, f)
+
+stargazer(contResults, summary=F, type='html',
+          digits=3)
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
+```{r}
+x2p <- extractP(catResults)
+tp <- extractP(contResults)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+# select only ps, then correct with mutate
+
+for (outcome in outVars) {
+  paste(outcome, "Age + BslNIH + occl4 + pig3 + CoreCBF30 + MismCBF30",
+        sep = " ~ ") %>%
+  glm(., data=df, family=binomial) ->
+  logit
+  
+  confint(logit) %>%
+    exp() -> 
+    ci
+
+  logit %>%
+    tidy() %>%
+    mutate(or = exp(estimate)) %>%
+    select(or, p.value) %>%
+    cbind(., ci) %>%
+    round(., sig) -> results
+
+  #dplyr rearrange columns
+}
+
+x <- rpart(poor ~ CoreCBF30, data=df)
+x$splits %>% as.tibble() %>% select(index)
+
+df %>% mutate(binCore = CoreCBF30 < 66.85) -> test
+x2 <- table(test$binCore, test$poor)
+# plot hist of df$occl4
+
 ```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
