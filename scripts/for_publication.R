@@ -16,11 +16,10 @@ bin <- c("Sex", "Diabetes", "HF", "MI/Angina", "Side")
 ord <- c("mRS_3m", "occl4", "pig3")
 cont <- c("Age",
           "BslNIH",
-          "tPAdelay",
-          "CoreCBF30",
-          "MismCBF30",
-          "CoreCBV60",
-          "MismCBV60")
+          "Core",
+          "Penumbra",
+          "DT8",
+          "24h Infarct Vol (cm3)")
 vars <- c(bin, ord, cont)
 sig <- 3
 
@@ -50,7 +49,7 @@ df %>%
 ord = ord[!ord %in% 'mRS_3m'] # gracelessly pop off mRS
 
 catVars <- c(bin, ord)
-outVars <- c('dead', 'poor')#, 'moderate', 'good', 'excellent')
+outVars <- c('dead', 'poor', 'moderate', 'good', 'excellent')
 
 
 catResults <- matrix(, nrow = length(catVars), ncol = 0)
@@ -65,11 +64,13 @@ for (outcome in outVars) {
       chisq.test(x)) %>%
     map_df(., magrittr::extract, c('statistic', 'p.value')) -> x2
   catResults <- cbind(catResults, x2)
-  
+
   map(df[cont], function(x)
     t.test(x ~ df[[outcome]])) %>%
     map_df(., magrittr::extract, c('statistic', 'p.value')) -> f
   contResults <- cbind(contResults, f)
+  print(outcome)
+  print(contResults)
 }
 
 map(df[catVars], function(x)
@@ -94,23 +95,26 @@ colnames(uni_ps) <- c(outVars, 'full')
 x = correct_p(uni_ps, method = 'holm')
 
 for (outcome in outVars) {
-  paste(outcome, "Age + BslNIH + occl4 + pig3 + CoreCBF30 + MismCBF30",
+  paste(outcome, "Age + BslNIH + 24h Infarct Vol (cm3)",
         sep = " ~ ") %>%
     glm(., data = df, family = binomial) ->
     logit
-  
+
   logit %>%
-    confint %>% 
+    confint %>%
     exp ->
     ci
-  
+
   logit %>%
     tidy() %>%
     mutate(or = exp(estimate)) %>%
     select(or, p.value) %>%
     cbind(., ci) ->
     results
-  
+
+  print(outcome)
+  print(results)
+
   #dplyr rearrange columns
 }
 
@@ -128,17 +132,17 @@ for (outcome in outVars) {
     map(as.numeric) %>%
     unlist ->
     splits
-  
+
   newnames <- paste(cartVars, "bin", sep="_")
-  
+
   df %>%
-    select(cartVars) < splits -> 
+    select(cartVars) < splits ->
     splitVars
-  
+
   colnames(splitVars) <- newnames
-  
+
   temp <- cbind(df, splitVars)
-  
+
   paste(outcome, "CoreCBV60_bin + Age_bin + BslNIH_bin",
         sep="~") %>%
     as.formula %>%
@@ -147,10 +151,10 @@ for (outcome in outVars) {
 
     predict(., type="response") ->
     predVals
-  
+
   temp$prob <- predVals
   roc(as.factor(temp$poor), temp$prob)
-    
+
 }
 
 x <- rpart(poor ~ CoreCBF30, data = df)
